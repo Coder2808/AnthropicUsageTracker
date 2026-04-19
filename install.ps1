@@ -141,8 +141,165 @@ if (-not $existing) {
 # ── Start tasks now (no need to log out) ────────────────────────────────────
 
 Start-ScheduledTask -TaskName $TaskDaemon
-Start-Sleep -Seconds 1     # let daemon bind its ports
+Start-Sleep -Seconds 2     # let daemon bind its ports
 Start-ScheduledTask -TaskName $TaskMenubar
+
+# ── Auto-configure session key ───────────────────────────────────────────────
+# Reads the claude.ai sessionKey from Chrome/Edge/Brave and sends it to the
+# daemon so it can poll usage data independently — no browser extension needed.
+#
+# Security model:
+#   • Cookies are decrypted using DPAPI (Windows Data Protection API) — this
+#     is the same mechanism Chrome uses and requires no extra privileges.
+#   • The session key is transmitted only to localhost:3457, never externally.
+#   • Python (already required) handles SQLite reads and AES-256-GCM decryption.
+
+function Invoke-AutoConfigureSession {
+    # Locate Python
+    $python = (Get-Command python  -ErrorAction SilentlyContinue)?.Source
+    if (-not $python) {
+        $python = (Get-Command python3 -ErrorAction SilentlyContinue)?.Source
+    }
+    if (-not $python) { return $false }
+
+    # Chromium-family browser profiles on Windows
+    $browsers = @(
+        [PSCustomObject]@{
+            Name       = 'Google Chrome'
+            LocalState = "$env:LOCALAPPDATA\Google\Chrome\User Data\Local State"
+            Cookies    = @(
+                "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Network\Cookies"
+                "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"
+            )
+        }
+        [PSCustomObject]@{
+            Name       = 'Microsoft Edge'
+            LocalState = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Local State"
+            Cookies    = @(
+                "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Network\Cookies"
+                "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"
+            )
+        }
+        [PSCustomObject]@{
+            Name       = 'Brave Browser'
+            LocalState = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Local State"
+            Cookies    = @(
+                "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Network\Cookies"
+                "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cookies"
+            )
+        }
+    )
+
+    # Python script: reads SQLite cookie DB and decrypts AES-256-GCM value.
+    # Receives the AES key as hex (decrypted by PowerShell via DPAPI above).
+    $pyScript = @'
+import sys, sqlite3, shutil, tempfile, os
+
+db_path  = sys.argv[1]
+key_hex  = sys.argv[2]
+aes_key  = bytes.fromhex(key_hex)
+
+tmp = tempfile.mktemp(suffix='.db')
+shutil.copy2(db_path, tmp)
+try:
+    con = sqlite3.connect(tmp)
+    row = con.execute(
+        "SELECT encrypted_value FROM cookies "
+        "WHERE host_key LIKE '%claude.ai%' AND name='sessionKey' LIMIT 1"
+    ).fetchone()
+    con.close()
+finally:
+    os.unlink(tmp)
+
+if not row or not row[0]:
+    sys.exit(1)
+
+enc = bytes(row[0])
+# Unencrypted fallback (very old Chrome builds)
+if enc[:3] != b'v10':
+    print(enc.decode('utf-8', errors='replace'))
+    sys.exit(0)
+
+# AES-256-GCM: v10 | nonce(12) | ciphertext | tag(16)
+nonce   = enc[3:15]
+payload = enc[15:]
+
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    plain = AESGCM(aes_key).decrypt(nonce, payload, None)
+except ImportError:
+    try:
+        from Crypto.Cipher import AES
+        plain = AES.new(aes_key, AES.MODE_GCM, nonce=nonce).decrypt(payload[:-16])
+    except ImportError:
+        sys.exit(1)
+
+print(plain.decode('utf-8'))
+'@
+
+    Add-Type -AssemblyName System.Security
+
+    foreach ($browser in $browsers) {
+        if (-not (Test-Path $browser.LocalState)) { continue }
+
+        $cookiesDb = $browser.Cookies | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $cookiesDb) { continue }
+
+        try {
+            # Step 1 — read DPAPI-encrypted AES key from Local State
+            $state    = Get-Content $browser.LocalState -Raw | ConvertFrom-Json
+            $encB64   = $state.os_crypt.encrypted_key
+            if (-not $encB64) { continue }
+
+            $encBytes = [Convert]::FromBase64String($encB64)
+            # Chrome prepends the literal string "DPAPI" (5 bytes) before the actual ciphertext
+            $cipherBytes = $encBytes[5..($encBytes.Length - 1)]
+
+            # Step 2 — decrypt AES key with Windows DPAPI (same user scope Chrome uses)
+            $aesKeyBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $cipherBytes, $null,
+                [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            )
+            $aesKeyHex = [BitConverter]::ToString($aesKeyBytes).Replace('-', '').ToLower()
+
+            # Step 3 — extract and decrypt the sessionKey cookie via Python
+            $tmpPy = [IO.Path]::GetTempFileName() + '.py'
+            $pyScript | Set-Content $tmpPy -Encoding UTF8
+
+            $sessionKey = & $python $tmpPy $cookiesDb $aesKeyHex 2>$null
+            Remove-Item $tmpPy -Force -ErrorAction SilentlyContinue
+
+            if (-not $sessionKey -or $sessionKey.Length -lt 10) { continue }
+
+            # Step 4 — POST to daemon (localhost only — never transmitted externally)
+            $body = "{`"sessionKey`":`"$($sessionKey.Trim())`"}"
+            $resp = Invoke-RestMethod `
+                -Uri         'http://127.0.0.1:3457/api/setup' `
+                -Method      POST `
+                -Body        $body `
+                -ContentType 'application/json' `
+                -ErrorAction SilentlyContinue
+
+            if ($resp.ok) {
+                Write-Host "  Found session key in $($browser.Name)"
+                Write-Host "  Daemon configured — will poll claude.ai every minute"
+                return $true
+            }
+        } catch {
+            continue  # browser not accessible or decryption failed — try next
+        }
+    }
+    return $false
+}
+
+Write-Host ""
+Write-Host "  Configuring session key..."
+$configured = Invoke-AutoConfigureSession
+if (-not $configured) {
+    Write-Host "  Could not auto-detect session key (browser not found or not logged in)."
+    Write-Host "  Open http://127.0.0.1:3457 and paste your claude.ai sessionKey cookie,"
+    Write-Host "  or install the Chrome extension and it will configure automatically."
+}
 
 Write-Host ""
 Write-Host "  Dashboard  ->  http://127.0.0.1:3457"

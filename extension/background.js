@@ -16,10 +16,16 @@ async function post(path, data) {
 
 async function getActiveOrgId() {
   try {
-    const tabs = await chrome.tabs.query({ url: '*://claude.ai/*' });
-    if (!tabs.length) return null;
-    const cookie = await chrome.cookies.get({ name: 'lastActiveOrg', url: tabs[0].url });
-    return cookie?.value ?? null;
+    // Read cookie directly — works even without an open claude.ai tab
+    const cookie = await chrome.cookies.get({ name: 'lastActiveOrg', url: 'https://claude.ai' });
+    if (cookie?.value) {
+      // Persist so we can fall back to it if the cookie is cleared mid-session
+      await chrome.storage.local.set({ cachedOrgId: cookie.value });
+      return cookie.value;
+    }
+    // Fall back to last known org ID (survives claude.ai being closed)
+    const stored = await chrome.storage.local.get('cachedOrgId');
+    return stored.cachedOrgId ?? null;
   } catch {
     return null;
   }
@@ -150,11 +156,39 @@ chrome.webRequest.onCompleted.addListener(
   }
 );
 
-// ── Periodic polling (every 2 minutes) ────────────────────────────────────
+// ── Auto-setup: seed daemon with session key (no user action needed) ───────
+// The extension already has `cookies` permission for claude.ai, so it reads
+// sessionKey and POSTs it to the daemon automatically.
+// Runs only when daemon reports not yet configured — safe no-op otherwise.
 
-chrome.alarms.create('pollUsage', { periodInMinutes: 2 });
+async function autoSetupDaemon() {
+  try {
+    const setupRes = await fetch(`${DAEMON}/api/setup`);
+    if (!setupRes.ok) return;
+    const { configured } = await setupRes.json();
+    if (configured) return;                        // already configured — nothing to do
+
+    const cookie = await chrome.cookies.get({ name: 'sessionKey', url: 'https://claude.ai' });
+    if (!cookie?.value) return;                    // user not logged into claude.ai yet
+
+    const r = await fetch(`${DAEMON}/api/setup`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ sessionKey: cookie.value }),
+    });
+    if (r.ok) console.log('[tracker] Daemon auto-configured — polling claude.ai independently');
+  } catch {
+    // Daemon not running yet — alarm will retry in 1 min
+  }
+}
+
+// ── Periodic polling ──────────────────────────────────────────────────────
+
+chrome.alarms.create('pollUsage', { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'pollUsage') pollAndPushSnapshot();
+  if (alarm.name !== 'pollUsage') return;
+  autoSetupDaemon();      // no-op once configured
+  pollAndPushSnapshot();
 });
 
 // ── Popup: status check ───────────────────────────────────────────────────
@@ -165,7 +199,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       .then(r => r.json())
       .then(d => respond({ daemon: true, ts: d.ts }))
       .catch(() => respond({ daemon: false }));
-    return true; // async
+    return true;
   }
   if (msg.type === 'pollNow') {
     pollAndPushSnapshot().then(() => respond({ ok: true }));
@@ -173,5 +207,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   }
 });
 
-// ── Startup: poll immediately ──────────────────────────────────────────────
-pollAndPushSnapshot();
+// ── Startup ───────────────────────────────────────────────────────────────
+autoSetupDaemon().then(() => pollAndPushSnapshot());

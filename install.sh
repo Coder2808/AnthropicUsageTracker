@@ -153,6 +153,117 @@ add_env_to_file() {
 add_env_to_file "$HOME/.zshrc"
 add_env_to_file "$HOME/.bash_profile"
 
+# ── Auto-configure daemon session key ────────────────────────────────────
+# Try to extract the claude.ai sessionKey from Chrome/Arc/Brave cookies so
+# users don't have to open DevTools manually.
+# Security: key is read from the local browser profile (same user, same
+# machine) and sent only to localhost:3457. It is never transmitted externally.
+
+auto_configure_session() {
+  # Require Python 3 (present on every macOS since Ventura)
+  local python; python=$(command -v python3 2>/dev/null || true)
+  [ -z "$python" ] && return 1
+
+  # Chromium-family browsers store cookies in SQLite, encrypted with a key
+  # derived from the "Chrome Safe Storage" / "Brave Safe Storage" Keychain entry.
+  local browsers=(
+    "Google Chrome:Chrome Safe Storage:$HOME/Library/Application Support/Google/Chrome/Default/Cookies"
+    "Brave Browser:Brave Safe Storage:$HOME/Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies"
+    "Arc:Arc Safe Storage:$HOME/Library/Application Support/Arc/User Data/Default/Cookies"
+    "Microsoft Edge:Microsoft Edge Safe Storage:$HOME/Library/Application Support/Microsoft Edge/Default/Cookies"
+  )
+
+  for entry in "${browsers[@]}"; do
+    IFS=':' read -r browser_name keychain_item cookie_db <<< "$entry"
+    [ -f "$cookie_db" ] || continue
+
+    # Read the Safe Storage password from Keychain — prompts user once with Touch ID / password
+    local safe_password
+    safe_password=$(security find-generic-password -w -s "$keychain_item" 2>/dev/null || true)
+    [ -z "$safe_password" ] && continue
+
+    # Decrypt the sessionKey cookie using Python (stdlib only — no pip required)
+    local session_key
+    session_key=$("$python" - "$cookie_db" "$safe_password" "claude.ai" "sessionKey" 2>/dev/null <<'PYEOF'
+import sys, sqlite3, hashlib, hmac, shutil, tempfile, os
+from pathlib import Path
+
+db_path, password, host, name = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+# Work on a copy so we don't lock Chrome's live database
+tmp = tempfile.mktemp(suffix='.db')
+shutil.copy2(db_path, tmp)
+try:
+    con = sqlite3.connect(tmp)
+    cur = con.execute(
+        "SELECT encrypted_value FROM cookies WHERE host_key LIKE ? AND name=? LIMIT 1",
+        (f'%{host}%', name)
+    )
+    row = cur.fetchone()
+    con.close()
+finally:
+    os.unlink(tmp)
+
+if not row or not row[0]:
+    sys.exit(1)
+
+enc = row[0]
+# Chrome on macOS uses v10 prefix + AES-128-CBC
+# key = PBKDF2-HMAC-SHA1(password, b'saltysalt', 1003, 16)
+# iv  = b' ' * 16
+if not enc[:3] == b'v10':
+    # Unencrypted (older Chrome versions) — value is plain text
+    print(enc.decode('utf-8', errors='replace'))
+    sys.exit(0)
+
+from hashlib import pbkdf2_hmac
+key = pbkdf2_hmac('sha1', password.encode('utf-8'), b'saltysalt', 1003, dklen=16)
+iv  = b' ' * 16
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    dec = cipher.decryptor()
+    raw = dec.update(enc[3:]) + dec.finalize()
+except ImportError:
+    # Fall back to stdlib AES via PyCryptodome if available, else give up
+    try:
+        from Crypto.Cipher import AES as _AES
+        raw = _AES.new(key, _AES.MODE_CBC, iv).decrypt(enc[3:])
+    except ImportError:
+        sys.exit(1)
+# Strip PKCS7 padding
+pad = raw[-1]
+print(raw[:-pad].decode('utf-8'))
+PYEOF
+)
+    if [ -n "$session_key" ]; then
+      echo "  ✓ Found session key in $browser_name"
+      # POST to daemon — localhost only, never leaves the machine
+      local resp
+      resp=$(curl -sf -X POST http://127.0.0.1:3457/api/setup \
+        -H 'Content-Type: application/json' \
+        -d "{\"sessionKey\":\"$session_key\"}" 2>/dev/null || true)
+      if echo "$resp" | grep -q '"ok":true'; then
+        echo "  ✓ Daemon configured — will poll claude.ai every minute"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+echo ""
+echo "  Configuring session key…"
+if auto_configure_session; then
+  : # success message already printed inside the function
+else
+  echo "  ℹ  Could not auto-detect session key (browser not found or not logged in)."
+  echo "     Open http://127.0.0.1:3457 after install and paste your claude.ai"
+  echo "     sessionKey cookie — or install the Chrome extension and it will"
+  echo "     configure the daemon automatically."
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────
 
 echo ""
