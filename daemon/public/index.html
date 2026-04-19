@@ -122,6 +122,23 @@
     .note { background: rgba(124,106,247,0.08); border: 1px solid rgba(124,106,247,0.25); border-radius: 10px; padding: 14px 16px; margin-bottom: 28px; font-size: 13px; color: var(--muted); line-height: 1.6; }
     .note strong { color: var(--text); }
 
+    /* ── Setup card ── */
+    .setup-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 28px; }
+    .setup-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .setup-card p  { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px; }
+    .setup-card ol { font-size: 12px; color: var(--muted); line-height: 2; padding-left: 18px; margin-bottom: 14px; }
+    .setup-card code { background: rgba(255,255,255,0.06); border-radius: 3px; padding: 1px 5px; font-size: 11px; color: var(--text); }
+    .setup-row { display: flex; gap: 8px; }
+    .setup-input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 12px; font-family: 'SF Mono','Fira Code',monospace; }
+    .setup-input:focus { outline: none; border-color: var(--accent); }
+    .setup-btn { padding: 7px 16px; background: var(--accent); border: none; border-radius: 6px; color: white; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .setup-btn:hover { opacity: 0.85; }
+    .setup-btn.danger { background: var(--red); }
+    .setup-status { font-size: 12px; margin-top: 8px; }
+    .setup-status.ok  { color: var(--green); }
+    .setup-status.err { color: var(--red); }
+    .configured-row { display: flex; align-items: center; justify-content: space-between; }
+
     .section { margin-bottom: 28px; }
   </style>
 </head>
@@ -136,6 +153,9 @@
   </header>
 
   <main>
+    <!-- Setup — session key for daemon-side polling (no Chrome extension needed) -->
+    <div id="setup-section"></div>
+
     <!-- Account limits — from server-side polling, reflects ALL surfaces -->
     <div class="section">
       <div class="section-title">Account limits · includes mobile &amp; other machines</div>

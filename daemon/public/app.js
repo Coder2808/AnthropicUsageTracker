@@ -221,7 +221,85 @@ async function loadAll() {
   }
 }
 
+// ── Setup card ─────────────────────────────────────────────────────────────
+
+async function loadSetup() {
+  const el = document.getElementById('setup-section');
+  if (!el) return;
+
+  try {
+    const { configured, orgId } = await fetch(`${API}/setup`).then(r => r.json());
+
+    if (configured) {
+      el.innerHTML = `
+        <div class="setup-card">
+          <div class="configured-row">
+            <span style="font-size:13px;font-weight:600;">
+              <span style="color:var(--green)">●</span>&nbsp; Polling claude.ai directly
+              <span style="font-size:11px;color:var(--muted);margin-left:8px;">org: ${esc(orgId ?? '—')}</span>
+            </span>
+            <button class="setup-btn danger" id="setup-revoke-btn">Revoke</button>
+          </div>
+        </div>`;
+      document.getElementById('setup-revoke-btn')?.addEventListener('click', async () => {
+        await fetch(`${API}/setup`, { method: 'DELETE' });
+        loadSetup();
+      });
+    } else {
+      el.innerHTML = `
+        <div class="setup-card">
+          <h3>Connect to claude.ai (no Chrome extension required)</h3>
+          <p>Paste your claude.ai session key and the daemon will poll usage data every minute — independent of any browser.</p>
+          <ol>
+            <li>Open <strong>claude.ai</strong> in your browser</li>
+            <li>Open DevTools → <strong>Application</strong> → <strong>Cookies</strong> → <code>https://claude.ai</code></li>
+            <li>Find the cookie named <code>sessionKey</code> and copy its <strong>Value</strong></li>
+            <li>Paste it below and click Save</li>
+          </ol>
+          <div class="setup-row">
+            <input class="setup-input" id="setup-sk-input" type="password"
+              placeholder="sk-ant-sid01-…" autocomplete="off" spellcheck="false">
+            <button class="setup-btn" id="setup-save-btn">Save &amp; Connect</button>
+          </div>
+          <div class="setup-status" id="setup-status"></div>
+        </div>`;
+
+      document.getElementById('setup-save-btn')?.addEventListener('click', async () => {
+        const sk     = document.getElementById('setup-sk-input')?.value?.trim();
+        const status = document.getElementById('setup-status');
+        if (!sk) { status.textContent = 'Paste your session key first.'; status.className = 'setup-status err'; return; }
+
+        status.textContent = 'Verifying…'; status.className = 'setup-status';
+        try {
+          const r = await fetch(`${API}/setup`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ sessionKey: sk }),
+          });
+          const d = await r.json();
+          if (r.ok) {
+            status.textContent = `Connected — org ${d.orgId}`;
+            status.className   = 'setup-status ok';
+            setTimeout(() => { loadSetup(); loadAll(); }, 1200);
+          } else {
+            status.textContent = d.error ?? 'Failed — check the session key and try again.';
+            status.className   = 'setup-status err';
+          }
+        } catch {
+          status.textContent = 'Could not reach daemon.';
+          status.className   = 'setup-status err';
+        }
+      });
+    }
+  } catch {
+    // Daemon offline — silently skip setup UI
+  }
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+
 // Auto-refresh every 30s
 document.getElementById('refresh-btn')?.addEventListener('click', loadAll);
+loadSetup();
 loadAll();
 setInterval(loadAll, 30_000);

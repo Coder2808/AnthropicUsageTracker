@@ -4,6 +4,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { handleProxyRequest } from './proxy.js';
 import apiRouter from './routes.js';
+import { startPoller } from './poller.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -64,4 +65,5 @@ apiApp.get('*', (_req, res) => res.sendFile(join(__dirname, '../public/index.htm
 
 apiApp.listen(API_PORT, '127.0.0.1', () => {
   console.log(`  Dashboard is ready at http://127.0.0.1:${API_PORT}\n`);
+  startPoller();
 });

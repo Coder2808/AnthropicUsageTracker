@@ -5,6 +5,8 @@ import {
   getTotals, getBreakdown, getDailyTotals, getSnapshotHistory,
 } from './db.js';
 import { calculateCost, normalizeModel } from './pricing.js';
+import { readConfig, writeConfig, clearConfig } from './config.js';
+import { discoverOrgId, restartPoller } from './poller.js';
 
 const router = Router();
 
@@ -109,5 +111,36 @@ router.get('/events', (req, res) => {
 });
 router.get('/snapshot', (req, res) => res.json(getLatestSnapshot() ?? {}));
 router.get('/health',   (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// ── Setup: store session key and start daemon-side polling ─────────────────
+
+router.get('/setup', (_req, res) => {
+  const { orgId, sessionKey } = readConfig();
+  res.json({ configured: !!(sessionKey && orgId), orgId: orgId ?? null });
+});
+
+router.post('/setup', async (req, res) => {
+  const sk = req.body?.sessionKey;
+  if (typeof sk !== 'string' || sk.trim().length < 10) {
+    return res.status(400).json({ error: 'Invalid session key' });
+  }
+  const sessionKey = sk.trim();
+
+  try {
+    // Validate the key and discover org ID in one step
+    const orgId = await discoverOrgId(sessionKey);
+    writeConfig({ sessionKey, orgId });
+    restartPoller();
+    res.json({ ok: true, orgId });
+  } catch (err) {
+    console.error('[setup] Failed:', err.message);
+    res.status(401).json({ error: 'Could not authenticate with claude.ai — check your session key' });
+  }
+});
+
+router.delete('/setup', (_req, res) => {
+  clearConfig();
+  res.json({ ok: true });
+});
 
 export default router;
