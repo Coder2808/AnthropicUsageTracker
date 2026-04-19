@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anthropic Usage Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3a;
+      --text:     #e2e4ed;
+      --muted:    #8b8fa8;
+      --accent:   #7c6af7;
+      --green:    #34d399;
+      --yellow:   #fbbf24;
+      --red:      #f87171;
+      --opus:     #a78bfa;
+      --sonnet:   #60a5fa;
+      --haiku:    #34d399;
+      --cli:      #fb923c;
+      --web:      #38bdf8;
+      --api:      #a3e635;
+    }
+
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.5; }
+
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 28px; border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; background: var(--bg); z-index: 10;
+    }
+    header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    #status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 6px; }
+    #status-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #last-sync { color: var(--muted); font-size: 12px; }
+    .refresh-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .refresh-btn:hover { background: var(--border); }
+
+    main { max-width: 1200px; margin: 0 auto; padding: 24px 28px; }
+
+    /* ── Account limits ── */
+    .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
+
+    .limits-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .limit-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .limit-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .limit-pct { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 10px; }
+    .limit-pct.ok   { color: var(--green); }
+    .limit-pct.warn { color: var(--yellow); }
+    .limit-pct.high { color: var(--red); }
+    .bar-track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 8px; }
+    .bar-fill  { height: 100%; border-radius: 2px; transition: width 0.4s; }
+    .bar-fill.ok   { background: var(--green); }
+    .bar-fill.warn { background: var(--yellow); }
+    .bar-fill.high { background: var(--red); }
+    .limit-reset { font-size: 11px; color: var(--muted); }
+    .limit-na { font-size: 28px; font-weight: 700; color: var(--border); }
+
+    /* ── Stat cards ── */
+    .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .stat-period { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .stat-cost { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+    .stat-tokens { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .stat-count  { font-size: 12px; color: var(--muted); }
+
+    /* ── Breakdown tables ── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 28px; }
+    @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+    .breakdown-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .breakdown-card h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; }
+    .breakdown-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .breakdown-label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.Opus   { background: var(--opus); }
+    .dot.Sonnet { background: var(--sonnet); }
+    .dot.Haiku  { background: var(--haiku); }
+    .dot.api    { background: var(--api); }
+    .dot.web    { background: var(--web); }
+    .dot.cli    { background: var(--cli); }
+    .dot.unknown { background: var(--muted); }
+    .breakdown-cost { font-weight: 600; font-size: 13px; }
+    .breakdown-sub { font-size: 11px; color: var(--muted); }
+    .mini-bar-track { height: 3px; background: var(--border); border-radius: 2px; margin-top: 3px; }
+    .mini-bar-fill  { height: 100%; border-radius: 2px; }
+
+    /* ── Chart ── */
+    .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 28px; }
+    .chart-card h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; }
+    #chart { display: flex; align-items: flex-end; gap: 4px; height: 80px; }
+    .chart-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .chart-bar { width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; opacity: 0.8; transition: opacity 0.2s; cursor: default; }
+    .chart-bar:hover { opacity: 1; }
+    .chart-label { font-size: 9px; color: var(--muted); }
+
+    /* ── Events table ── */
+    .events-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .events-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .events-header h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 500; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+    td { padding: 9px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .badge.api  { background: rgba(163,230,53,0.15); color: var(--api); }
+    .badge.web  { background: rgba(56,189,248,0.15); color: var(--web); }
+    .badge.cli  { background: rgba(251,146,60,0.15); color: var(--cli); }
+    .badge.Opus   { background: rgba(167,139,250,0.15); color: var(--opus); }
+    .badge.Sonnet { background: rgba(96,165,250,0.15); color: var(--sonnet); }
+    .badge.Haiku  { background: rgba(52,211,153,0.15); color: var(--haiku); }
+    .badge.unknown { background: rgba(139,143,168,0.15); color: var(--muted); }
+    .mono { font-family: 'SF Mono', 'Fira Code', monospace; }
+    .empty { text-align: center; padding: 32px; color: var(--muted); font-size: 13px; }
+
+    /* ── Note card ── */
+    .note { background: rgba(124,106,247,0.08); border: 1px solid rgba(124,106,247,0.25); border-radius: 10px; padding: 14px 16px; margin-bottom: 28px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+    .note strong { color: var(--text); }
+
+    .section { margin-bottom: 28px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Anthropic Usage Tracker</h1>
+    <div class="header-right">
+      <span><span id="status-dot"></span><span id="status-text" style="font-size:12px;color:var(--muted)">Connecting…</span></span>
+      <span id="last-sync" class="last-sync"></span>
+      <button class="refresh-btn" id="refresh-btn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Account limits — from server-side polling, reflects ALL surfaces -->
+    <div class="section">
+      <div class="section-title">Account limits · includes mobile &amp; other machines</div>
+      <div class="limits-grid" id="limits-grid">
+        <div class="limit-card"><div class="limit-na">—</div><div class="limit-reset">Loading…</div></div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="section">
+      <div class="section-title">Locally tracked usage · API, CLI &amp; browser</div>
+      <div class="stats-row" id="stats-row">
+        <div class="stat-card"><div class="stat-period">Loading…</div></div>
+      </div>
+    </div>
+
+    <!-- Breakdown -->
+    <div class="two-col">
+      <div class="breakdown-card">
+        <h3>By model · this week</h3>
+        <div id="model-breakdown"><div style="color:var(--muted);font-size:13px">No data</div></div>
+      </div>
+      <div class="breakdown-card">
+        <h3>By surface · this week</h3>
+        <div id="surface-breakdown"><div style="color:var(--muted);font-size:13px">No data</div></div>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="chart-card">
+      <h3>Daily cost · last 30 days (USD)</h3>
+      <div id="chart"></div>
+    </div>
+
+    <!-- Note -->
+    <div class="note">
+      <strong>Coverage note:</strong> The account limits above come from Anthropic's servers and reflect <em>all</em> your usage (mobile, other machines, browser).
+      Token &amp; cost breakdowns below are captured locally — they include CLI, SDK, and browser on <em>this machine</em> only.
+      Other-machine usage is visible via the limits bar but won't appear in the events table.
+    </div>
+
+    <!-- Events -->
+    <div class="events-card">
+      <div class="events-header">
+        <h3>Recent events</h3>
+        <span style="font-size:12px;color:var(--muted)" id="events-count"></span>
+      </div>
+      <div id="events-body">
+        <div class="empty">No events yet. Start using Claude CLI or claude.ai.</div>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

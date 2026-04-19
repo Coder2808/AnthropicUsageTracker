@@ -1,0 +1,16 @@
+{
+  "name": "anthropic-tracker-daemon",
+  "version": "1.0.0",
+  "description": "Tracks Anthropic API usage across all surfaces — CLI, browser, SDK",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.18.3"
+  }
+}

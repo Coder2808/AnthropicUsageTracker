@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src http://127.0.0.1:3457; img-src 'self' data:; frame-ancestors 'none'">
+  <title>Claude Usage</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #141518;
+      --surface: #1e2024;
+      --border:  #2d3038;
+      --text:    #e2e4ed;
+      --muted:   #7b7f96;
+      --accent:  #7c6af7;
+      --green:   #34d399;
+      --yellow:  #fbbf24;
+      --red:     #f87171;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+      /* macOS popover styling */
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+
+    /* ── Logo ── */
+    .logo-wrap { position: relative; flex-shrink: 0; }
+    .logo-arc  { display: block; }
+    .daemon-dot {
+      position: absolute; bottom: 0; right: 0;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--muted); border: 1.5px solid var(--bg);
+    }
+    .daemon-dot.ok  { background: var(--green); }
+    .daemon-dot.err { background: var(--red); }
+
+    .header-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+    .header-sub   { font-size: 10px; color: var(--muted); margin-top: 1px; }
+    .close-btn {
+      background: none; border: none; color: var(--muted); font-size: 16px;
+      cursor: pointer; padding: 0 2px; line-height: 1;
+    }
+    .close-btn:hover { color: var(--text); }
+
+    /* ── Limits ── */
+    .section { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .section-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--muted); margin-bottom: 10px;
+    }
+
+    .limit-row { margin-bottom: 11px; }
+    .limit-row:last-child { margin-bottom: 0; }
+    .limit-top {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 4px;
+    }
+    .limit-name { font-size: 12px; color: var(--muted); }
+    .limit-pct  { font-size: 12px; font-weight: 600; }
+    .limit-pct.ok   { color: var(--green); }
+    .limit-pct.warn { color: var(--yellow); }
+    .limit-pct.high { color: var(--red); }
+    .limit-reset { font-size: 10px; color: var(--muted); }
+    .bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+    .bar-fill.ok   { background: var(--green); }
+    .bar-fill.warn { background: var(--yellow); }
+    .bar-fill.high { background: var(--red); }
+
+    .no-limits { font-size: 12px; color: var(--muted); text-align: center; padding: 6px 0; }
+
+    /* ── Stats row ── */
+    .stats-row {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px; background: var(--border);
+      border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    }
+    .stat-cell {
+      background: var(--bg); padding: 10px 10px 9px;
+      text-align: center;
+    }
+    .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 3px; }
+    .stat-value { font-size: 14px; font-weight: 700; letter-spacing: -0.02em; }
+    .stat-sub   { font-size: 9px; color: var(--muted); margin-top: 1px; }
+
+    /* ── Footer ── */
+    .footer { padding: 10px 14px; display: flex; gap: 8px; }
+    .btn {
+      flex: 1; padding: 7px 10px; border-radius: 6px; font-size: 12px;
+      border: 1px solid var(--border); cursor: pointer; text-align: center;
+      background: var(--surface); color: var(--text);
+    }
+    .btn:hover   { background: var(--border); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    .btn.primary:hover { opacity: 0.9; }
+
+    /* ── Offline state ── */
+    .offline {
+      padding: 24px 14px; text-align: center; color: var(--muted);
+    }
+    .offline .icon { font-size: 28px; margin-bottom: 8px; }
+    .offline .msg  { font-size: 12px; line-height: 1.5; }
+    .offline code  { display: inline-block; background: var(--surface); border: 1px solid var(--border);
+                     border-radius: 4px; padding: 3px 6px; font-size: 11px; color: var(--text); margin-top: 6px; }
+
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <!-- Logo: "C" arc in Anthropic copper/sand tones, status dot overlaid -->
+      <div class="logo-wrap">
+        <svg class="logo-arc" width="32" height="32" viewBox="0 0 32 32" fill="none"
+             xmlns="http://www.w3.org/2000/svg">
+          <!-- Outer glow ring (faint) -->
+          <circle cx="16" cy="16" r="13" stroke="#c9a87c" stroke-width="0.5" opacity="0.2"/>
+          <!-- Main "C" arc — opens on the right, ~60° gap -->
+          <path d="M 24.0 9.2 A 11 11 0 1 0 24.0 22.8"
+                stroke="url(#cGrad)" stroke-width="3.2"
+                stroke-linecap="round" fill="none"/>
+          <!-- Small end-cap dots for polish -->
+          <circle cx="24.0" cy="9.2"  r="1.6" fill="#c9a87c"/>
+          <circle cx="24.0" cy="22.8" r="1.6" fill="#c9a87c"/>
+          <defs>
+            <linearGradient id="cGrad" x1="16" y1="4" x2="16" y2="28" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#e8c99a"/>
+              <stop offset="100%" stop-color="#b8855a"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <div class="daemon-dot" id="daemon-dot"></div>
+      </div>
+      <div>
+        <div class="header-title">Claude Usage</div>
+        <div class="header-sub" id="last-update">Loading…</div>
+      </div>
+    </div>
+    <button class="close-btn" id="close-btn">✕</button>
+  </div>
+
+  <div id="main-content">
+    <div class="section"><div class="no-limits"><span class="spin">◌</span> Loading…</div></div>
+  </div>
+
+  <div class="footer">
+    <button class="btn" id="refresh-btn">↻ Refresh</button>
+    <button class="btn primary" id="dashboard-btn">Open Dashboard ↗</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

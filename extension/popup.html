@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 280px; background: #0f1117; color: #e2e4ed;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+    }
+    .header { padding: 14px 16px 10px; border-bottom: 1px solid #2a2d3a; }
+    .header h1 { font-size: 14px; font-weight: 600; }
+    .header .sub { font-size: 11px; color: #8b8fa8; margin-top: 2px; }
+
+    .status-row { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #2a2d3a; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #8b8fa8; }
+    .dot.ok { background: #34d399; box-shadow: 0 0 5px #34d399; }
+    .dot.err { background: #f87171; }
+    .status-text { font-size: 12px; color: #8b8fa8; }
+    .status-text.ok { color: #34d399; }
+    .status-text.err { color: #f87171; }
+
+    .limits { padding: 12px 16px; border-bottom: 1px solid #2a2d3a; }
+    .limits-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #8b8fa8; margin-bottom: 10px; }
+    .limit-row { margin-bottom: 10px; }
+    .limit-row:last-child { margin-bottom: 0; }
+    .limit-label { display: flex; justify-content: space-between; margin-bottom: 3px; font-size: 11px; color: #8b8fa8; }
+    .limit-pct { color: #e2e4ed; font-weight: 500; }
+    .bar { height: 3px; background: #2a2d3a; border-radius: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 2px; }
+    .ok   { background: #34d399; }
+    .warn { background: #fbbf24; }
+    .high { background: #f87171; }
+    .no-data { font-size: 12px; color: #8b8fa8; padding: 4px 0; }
+
+    .actions { padding: 12px 16px; display: flex; flex-direction: column; gap: 7px; }
+    .btn { display: block; width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #2a2d3a; font-size: 12px; cursor: pointer; text-align: center; text-decoration: none; }
+    .btn-primary { background: #7c6af7; border-color: #7c6af7; color: white; }
+    .btn-primary:hover { background: #6d5ce6; }
+    .btn-secondary { background: #1a1d27; color: #e2e4ed; }
+    .btn-secondary:hover { background: #2a2d3a; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Anthropic Usage Tracker</h1>
+    <div class="sub">Local tracking daemon</div>
+  </div>
+
+  <div class="status-row">
+    <div class="dot" id="dot"></div>
+    <div class="status-text" id="status-text">Checking…</div>
+  </div>
+
+  <div class="limits" id="limits-section">
+    <div class="limits-title">Account limits · all surfaces</div>
+    <div class="no-data" id="no-data">Loading…</div>
+    <div id="limit-rows" style="display:none"></div>
+  </div>
+
+  <div class="actions">
+    <a class="btn btn-primary" href="http://127.0.0.1:3457" target="_blank">Open Dashboard</a>
+    <button class="btn btn-secondary" id="poll-btn">Poll usage now</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

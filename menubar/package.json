@@ -1,0 +1,13 @@
+{
+  "name": "anthropic-tracker-menubar",
+  "version": "1.0.0",
+  "description": "macOS menu bar app for Anthropic usage tracking",
+  "main": "main.js",
+  "scripts": {
+    "start": "pkill -9 -f 'anthropic-tracker/menubar' 2>/dev/null; sleep 0.5; electron .",
+    "stop":  "pkill -9 -f 'anthropic-tracker/menubar' 2>/dev/null; true"
+  },
+  "dependencies": {
+    "electron": "^30.0.0"
+  }
+}
