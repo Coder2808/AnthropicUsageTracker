@@ -1,4 +1,4 @@
-# install.ps1 — sets up Anthropic Usage Tracker as Windows Scheduled Tasks
+﻿# install.ps1 -- sets up Anthropic Usage Tracker as Windows Scheduled Tasks
 # Run from an elevated PowerShell prompt: .\install.ps1
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
@@ -12,10 +12,10 @@ $TaskDaemon  = 'AnthropicTrackerDaemon'
 $TaskMenubar = 'AnthropicTrackerMenubar'
 
 Write-Host ""
-Write-Host "  Anthropic Usage Tracker — Installing (Windows)"
+Write-Host "  Anthropic Usage Tracker -- Installing (Windows)"
 Write-Host ""
 
-# ── Find Node.js ────────────────────────────────────────────────────────────
+# -- Find Node.js ------------------------------------------------------------
 
 $_cmd = Get-Command node -ErrorAction SilentlyContinue
 $NodeBin = if ($_cmd) { $_cmd.Source } else { $null }
@@ -38,7 +38,7 @@ $NpmBin   = Join-Path $NodeDir 'npm.cmd'
 $NodeVer  = & $NodeBin --version
 Write-Host "  Node:     $NodeBin  ($NodeVer)"
 
-# ── Install dependencies ─────────────────────────────────────────────────────
+# -- Install dependencies -----------------------------------------------------
 
 if (-not (Test-Path (Join-Path $DaemonDir 'node_modules'))) {
     Write-Host "  Installing daemon dependencies..."
@@ -59,7 +59,7 @@ if (-not (Test-Path $ElectronBin)) {
 }
 Write-Host "  Electron: $ElectronBin"
 
-# ── Stop any running instances ───────────────────────────────────────────────
+# -- Stop any running instances -----------------------------------------------
 
 Get-Process -Name 'node','electron' -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -match 'anthropic-tracker' } |
@@ -72,7 +72,7 @@ foreach ($t in $TaskDaemon, $TaskMenubar) {
 
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
 
-# ── Daemon scheduled task ────────────────────────────────────────────────────
+# -- Daemon scheduled task ----------------------------------------------------
 # Trigger: at logon. Restart on failure up to 10 times with 1-minute delay.
 
 $DaemonAction  = New-ScheduledTaskAction `
@@ -99,11 +99,11 @@ Register-ScheduledTask `
     -Trigger    $DaemonTrigger `
     -Settings   $DaemonSettings `
     -Principal  $DaemonPrincipal `
-    -Description 'Anthropic Usage Tracker — proxy + API daemon' | Out-Null
+    -Description 'Anthropic Usage Tracker -- proxy + API daemon' | Out-Null
 
 Write-Host "  Daemon task registered: $TaskDaemon"
 
-# ── Menubar scheduled task ───────────────────────────────────────────────────
+# -- Menubar scheduled task ---------------------------------------------------
 # RestartOnFailure but NOT on clean exit (Electron exits 0 on quit).
 
 $MenubarAction  = New-ScheduledTaskAction `
@@ -125,11 +125,11 @@ Register-ScheduledTask `
     -Trigger    $MenubarTrigger `
     -Settings   $MenubarSettings `
     -Principal  $DaemonPrincipal `
-    -Description 'Anthropic Usage Tracker — system tray app' | Out-Null
+    -Description 'Anthropic Usage Tracker -- system tray app' | Out-Null
 
 Write-Host "  Menubar task registered: $TaskMenubar"
 
-# ── ANTHROPIC_BASE_URL as a persistent user environment variable ─────────────
+# -- ANTHROPIC_BASE_URL as a persistent user environment variable -------------
 
 $existing = [Environment]::GetEnvironmentVariable('ANTHROPIC_BASE_URL', 'User')
 if (-not $existing) {
@@ -139,21 +139,21 @@ if (-not $existing) {
     Write-Host "  ANTHROPIC_BASE_URL already set: $existing"
 }
 
-# ── Start tasks now (no need to log out) ────────────────────────────────────
+# -- Start tasks now (no need to log out) ------------------------------------
 
 Start-ScheduledTask -TaskName $TaskDaemon
 Start-Sleep -Seconds 2     # let daemon bind its ports
 Start-ScheduledTask -TaskName $TaskMenubar
 
-# ── Auto-configure session key ───────────────────────────────────────────────
+# -- Auto-configure session key -----------------------------------------------
 # Reads the claude.ai sessionKey from Chrome/Edge/Brave and sends it to the
-# daemon so it can poll usage data independently — no browser extension needed.
+# daemon so it can poll usage data independently -- no browser extension needed.
 #
 # Security model:
-#   • Cookies are decrypted using DPAPI (Windows Data Protection API) — this
+#   * Cookies are decrypted using DPAPI (Windows Data Protection API) -- this
 #     is the same mechanism Chrome uses and requires no extra privileges.
-#   • The session key is transmitted only to localhost:3457, never externally.
-#   • Python (already required) handles SQLite reads and AES-256-GCM decryption.
+#   * The session key is transmitted only to localhost:3457, never externally.
+#   * Python (already required) handles SQLite reads and AES-256-GCM decryption.
 
 function Invoke-AutoConfigureSession {
     # Locate Python (required for SQLite access and AES-GCM decryption)
@@ -245,7 +245,7 @@ function Invoke-AutoConfigureSession {
         $sessionKey = $null
         $aesKeyHex  = $null
 
-        # Step 1 — read DPAPI-encrypted AES key from Local State
+        # Step 1 -- read DPAPI-encrypted AES key from Local State
         $state = $null
         try {
             $state = Get-Content $browser.LocalState -Raw | ConvertFrom-Json
@@ -257,7 +257,7 @@ function Invoke-AutoConfigureSession {
         try { $encB64 = $state.os_crypt.encrypted_key } catch { }
         if (-not $encB64) { continue }
 
-        # Step 2 — decrypt AES key with Windows DPAPI
+        # Step 2 -- decrypt AES key with Windows DPAPI
         try {
             $encBytes    = [Convert]::FromBase64String($encB64)
             $cipherBytes = $encBytes[5..($encBytes.Length - 1)]
@@ -270,7 +270,7 @@ function Invoke-AutoConfigureSession {
             continue
         }
 
-        # Step 3 — write Python script to temp file, decrypt cookie
+        # Step 3 -- write Python script to temp file, decrypt cookie
         $tmpPy = [IO.Path]::GetTempFileName() + '.py'
         try {
             $pyScript | Set-Content $tmpPy -Encoding UTF8
@@ -282,7 +282,7 @@ function Invoke-AutoConfigureSession {
 
         if (-not $sessionKey -or $sessionKey.Length -lt 10) { continue }
 
-        # Step 4 — POST to daemon (localhost only — never transmitted externally)
+        # Step 4 -- POST to daemon (localhost only -- never transmitted externally)
         $body = "{`"sessionKey`":`"$($sessionKey.Trim())`"}"
         $resp = $null
         try {
