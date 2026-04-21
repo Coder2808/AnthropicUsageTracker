@@ -17,7 +17,8 @@ Write-Host ""
 
 # ── Find Node.js ────────────────────────────────────────────────────────────
 
-$NodeBin = (Get-Command node -ErrorAction SilentlyContinue)?.Source
+$_cmd = Get-Command node -ErrorAction SilentlyContinue
+$NodeBin = if ($_cmd) { $_cmd.Source } else { $null }
 if (-not $NodeBin) {
     # Common nvm-windows and direct install paths
     $candidates = @(
@@ -156,9 +157,11 @@ Start-ScheduledTask -TaskName $TaskMenubar
 
 function Invoke-AutoConfigureSession {
     # Locate Python
-    $python = (Get-Command python  -ErrorAction SilentlyContinue)?.Source
+    $_py = Get-Command python -ErrorAction SilentlyContinue
+    $python = if ($_py) { $_py.Source } else { $null }
     if (-not $python) {
-        $python = (Get-Command python3 -ErrorAction SilentlyContinue)?.Source
+        $_py3 = Get-Command python3 -ErrorAction SilentlyContinue
+        $python = if ($_py3) { $_py3.Source } else { $null }
     }
     if (-not $python) { return $false }
 
