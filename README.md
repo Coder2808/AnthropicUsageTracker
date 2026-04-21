@@ -89,7 +89,10 @@ bash uninstall.sh
 
 ### Windows
 
-Open **PowerShell as Administrator** and run:
+> **Important:** `.ps1` scripts must be run from inside PowerShell — not by double-clicking or from Command Prompt. Double-clicking will open the file in a text editor.
+
+1. Press `Win + X` → **Windows PowerShell (Admin)** — or search "PowerShell", right-click → **Run as administrator**
+2. In that PowerShell window, run:
 
 ```powershell
 # 1. Clone the repository
@@ -101,6 +104,11 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 
 # 3. Run the installer
 .\install.ps1
+```
+
+If Windows still blocks execution, use this one-time bypass:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 The installer:
