@@ -156,7 +156,7 @@ Start-ScheduledTask -TaskName $TaskMenubar
 #   • Python (already required) handles SQLite reads and AES-256-GCM decryption.
 
 function Invoke-AutoConfigureSession {
-    # Locate Python
+    # Locate Python (required for SQLite access and AES-GCM decryption)
     $_py = Get-Command python -ErrorAction SilentlyContinue
     $python = if ($_py) { $_py.Source } else { $null }
     if (-not $python) {
@@ -165,13 +165,45 @@ function Invoke-AutoConfigureSession {
     }
     if (-not $python) { return $false }
 
+    # Build Python script as a string array and join with newlines.
+    # Avoids here-strings whose embedded try/except blocks can confuse
+    # the PowerShell 5.1 parser even though the content is never executed.
+    $pyLines = @(
+        'import sys, sqlite3, shutil, tempfile, os',
+        'db_path, key_hex = sys.argv[1], sys.argv[2]',
+        'aes_key = bytes.fromhex(key_hex)',
+        'tmp = tempfile.mktemp(suffix=''.db'')',
+        'shutil.copy2(db_path, tmp)',
+        'row = None',
+        'con = sqlite3.connect(tmp)',
+        'row = con.execute("SELECT encrypted_value FROM cookies WHERE host_key LIKE ' + "'%claude.ai%'" + ' AND name=' + "'sessionKey'" + ' LIMIT 1").fetchone()',
+        'con.close()',
+        'os.unlink(tmp)',
+        'if not row or not row[0]: sys.exit(1)',
+        'enc = bytes(row[0])',
+        'if enc[:3] != b"v10": print(enc.decode("utf-8", errors="replace")); sys.exit(0)',
+        'nonce = enc[3:15]',
+        'payload = enc[15:]',
+        'plain = None',
+        'try:',
+        '    from cryptography.hazmat.primitives.ciphers.aead import AESGCM',
+        '    plain = AESGCM(aes_key).decrypt(nonce, payload, None)',
+        'except Exception:',
+        '    pass',
+        'if plain is None:',
+        '    from Crypto.Cipher import AES',
+        '    plain = AES.new(aes_key, AES.MODE_GCM, nonce=nonce).decrypt(payload[:-16])',
+        'print(plain.decode("utf-8"))'
+    )
+    $pyScript = $pyLines -join "`n"
+
     # Chromium-family browser profiles on Windows
     $browsers = @(
         [PSCustomObject]@{
             Name       = 'Google Chrome'
             LocalState = "$env:LOCALAPPDATA\Google\Chrome\User Data\Local State"
             Cookies    = @(
-                "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Network\Cookies"
+                "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Network\Cookies",
                 "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies"
             )
         }
@@ -179,7 +211,7 @@ function Invoke-AutoConfigureSession {
             Name       = 'Microsoft Edge'
             LocalState = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Local State"
             Cookies    = @(
-                "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Network\Cookies"
+                "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Network\Cookies",
                 "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies"
             )
         }
@@ -187,112 +219,91 @@ function Invoke-AutoConfigureSession {
             Name       = 'Brave Browser'
             LocalState = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Local State"
             Cookies    = @(
-                "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Network\Cookies"
+                "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Network\Cookies",
                 "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cookies"
             )
         }
     )
 
-    # Python script: reads SQLite cookie DB and decrypts AES-256-GCM value.
-    # Receives the AES key as hex (decrypted by PowerShell via DPAPI above).
-    $pyScript = @'
-import sys, sqlite3, shutil, tempfile, os
-
-db_path  = sys.argv[1]
-key_hex  = sys.argv[2]
-aes_key  = bytes.fromhex(key_hex)
-
-tmp = tempfile.mktemp(suffix='.db')
-shutil.copy2(db_path, tmp)
-try:
-    con = sqlite3.connect(tmp)
-    row = con.execute(
-        "SELECT encrypted_value FROM cookies "
-        "WHERE host_key LIKE '%claude.ai%' AND name='sessionKey' LIMIT 1"
-    ).fetchone()
-    con.close()
-finally:
-    os.unlink(tmp)
-
-if not row or not row[0]:
-    sys.exit(1)
-
-enc = bytes(row[0])
-# Unencrypted fallback (very old Chrome builds)
-if enc[:3] != b'v10':
-    print(enc.decode('utf-8', errors='replace'))
-    sys.exit(0)
-
-# AES-256-GCM: v10 | nonce(12) | ciphertext | tag(16)
-nonce   = enc[3:15]
-payload = enc[15:]
-
-try:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    plain = AESGCM(aes_key).decrypt(nonce, payload, None)
-except ImportError:
-    try:
-        from Crypto.Cipher import AES
-        plain = AES.new(aes_key, AES.MODE_GCM, nonce=nonce).decrypt(payload[:-16])
-    except ImportError:
-        sys.exit(1)
-
-print(plain.decode('utf-8'))
-'@
-
     Add-Type -AssemblyName System.Security
 
-    foreach ($browser in $browsers) {
+    $result = $false
+    $browserIndex = 0
+
+    while (-not $result -and $browserIndex -lt $browsers.Count) {
+        $browser = $browsers[$browserIndex]
+        $browserIndex++
+
         if (-not (Test-Path $browser.LocalState)) { continue }
 
-        $cookiesDb = $browser.Cookies | Where-Object { Test-Path $_ } | Select-Object -First 1
+        $cookiesDb = $null
+        foreach ($p in $browser.Cookies) {
+            if (Test-Path $p) { $cookiesDb = $p; break }
+        }
         if (-not $cookiesDb) { continue }
 
+        $sessionKey = $null
+        $aesKeyHex  = $null
+
+        # Step 1 — read DPAPI-encrypted AES key from Local State
+        $state = $null
         try {
-            # Step 1 — read DPAPI-encrypted AES key from Local State
-            $state    = Get-Content $browser.LocalState -Raw | ConvertFrom-Json
-            $encB64   = $state.os_crypt.encrypted_key
-            if (-not $encB64) { continue }
+            $state = Get-Content $browser.LocalState -Raw | ConvertFrom-Json
+        } catch {
+            continue
+        }
 
-            $encBytes = [Convert]::FromBase64String($encB64)
-            # Chrome prepends the literal string "DPAPI" (5 bytes) before the actual ciphertext
+        $encB64 = $null
+        try { $encB64 = $state.os_crypt.encrypted_key } catch { }
+        if (-not $encB64) { continue }
+
+        # Step 2 — decrypt AES key with Windows DPAPI
+        try {
+            $encBytes    = [Convert]::FromBase64String($encB64)
             $cipherBytes = $encBytes[5..($encBytes.Length - 1)]
-
-            # Step 2 — decrypt AES key with Windows DPAPI (same user scope Chrome uses)
             $aesKeyBytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
                 $cipherBytes, $null,
                 [System.Security.Cryptography.DataProtectionScope]::CurrentUser
             )
             $aesKeyHex = [BitConverter]::ToString($aesKeyBytes).Replace('-', '').ToLower()
+        } catch {
+            continue
+        }
 
-            # Step 3 — extract and decrypt the sessionKey cookie via Python
-            $tmpPy = [IO.Path]::GetTempFileName() + '.py'
+        # Step 3 — write Python script to temp file, decrypt cookie
+        $tmpPy = [IO.Path]::GetTempFileName() + '.py'
+        try {
             $pyScript | Set-Content $tmpPy -Encoding UTF8
-
             $sessionKey = & $python $tmpPy $cookiesDb $aesKeyHex 2>$null
-            Remove-Item $tmpPy -Force -ErrorAction SilentlyContinue
+        } catch {
+            $sessionKey = $null
+        }
+        Remove-Item $tmpPy -Force -ErrorAction SilentlyContinue
 
-            if (-not $sessionKey -or $sessionKey.Length -lt 10) { continue }
+        if (-not $sessionKey -or $sessionKey.Length -lt 10) { continue }
 
-            # Step 4 — POST to daemon (localhost only — never transmitted externally)
-            $body = "{`"sessionKey`":`"$($sessionKey.Trim())`"}"
+        # Step 4 — POST to daemon (localhost only — never transmitted externally)
+        $body = "{`"sessionKey`":`"$($sessionKey.Trim())`"}"
+        $resp = $null
+        try {
             $resp = Invoke-RestMethod `
                 -Uri         'http://127.0.0.1:3457/api/setup' `
                 -Method      POST `
                 -Body        $body `
                 -ContentType 'application/json' `
                 -ErrorAction SilentlyContinue
-
-            if ($resp.ok) {
-                Write-Host "  Found session key in $($browser.Name)"
-                Write-Host "  Daemon configured — will poll claude.ai every minute"
-                return $true
-            }
         } catch {
-            continue  # browser not accessible or decryption failed — try next
+            $resp = $null
+        }
+
+        if ($resp -and $resp.ok) {
+            Write-Host "  Found session key in $($browser.Name)"
+            Write-Host "  Daemon configured -- will poll claude.ai every minute"
+            $result = $true
         }
     }
-    return $false
+
+    return $result
 }
 
 Write-Host ""
